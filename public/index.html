@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+  <meta name="theme-color" content="#0b0f14">
+  <meta name="color-scheme" content="dark">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="mobile-web-app-capable" content="yes">
+  <title>Panel Cabina</title>
+  <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="/app.css">
+</head>
+<body>
+  <header id="barra">
+    <div class="fila1">
+      <h1>🎛 Panel Cabina</h1>
+      <div id="estados"></div>
+      <div class="acciones">
+        <button id="b-pantalla" class="mini" title="Mantener la pantalla encendida">🔆</button>
+        <a class="mini" href="/conectar" target="_blank" title="Dirección y QR">📱</a>
+        <button id="b-ajustes" class="mini solo-editor" title="Ajustes">⚙️</button>
+        <button id="b-editar" class="mini" title="Modo edición">🔒</button>
+      </div>
+    </div>
+    <div class="fila2" id="envivo"></div>
+  </header>
+
+  <div id="aviso-sim" hidden>MODO SIMULACIÓN — no se envía nada<span class="largo"> a ProPresenter ni a Resolume</span></div>
+  <div id="aviso-edicion" hidden>✏️ MODO EDICIÓN — tocá un botón para modificarlo</div>
+  <div id="aviso-conexion" hidden></div>
+
+  <nav id="pestanas"></nav>
+  <div id="herr-pagina" hidden></div>
+  <main id="contenido"></main>
+
+  <datalist id="lista-biblioteca"></datalist>
+  <div id="modales"></div>
+  <div id="toasts"></div>
+
+  <script src="/vendor/NoSleep.min.js"></script>
+  <script src="/app.js"></script>
+</body>
+</html>

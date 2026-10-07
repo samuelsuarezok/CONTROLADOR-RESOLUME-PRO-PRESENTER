@@ -1,0 +1,65 @@
+# ============================================================
+#  Publica una versión nueva en "Releases" con los ejecutables
+#  de Windows y Mac listos para descargar.
+#  Se dispara al subir una etiqueta:  git tag v1.2.0 && git push origin v1.2.0
+#  Compila en una Mac para que los ejecutables de Mac queden firmados
+#  (Apple Silicon no abre ejecutables sin firma).
+# ============================================================
+name: Publicar versión
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  publicar:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.2
+
+      - name: Instalar dependencias
+        run: bun install --frozen-lockfile
+
+      - name: Prueba de punta a punta (si falla, no se publica nada)
+        run: bun run test
+
+      - name: Compilar Windows y Mac
+        run: bun run build
+
+      - name: Preparar descargas
+        # Mac va en .zip para que conserve el permiso de ejecución.
+        # Windows va como .exe suelto: si se abre desde adentro de un .zip, la carpeta data se pierde.
+        run: |
+          mkdir -p descargas
+          cd dist
+          chmod +x Panel-Cabina-mac-arm64 Panel-Cabina-mac-x64
+          zip -9 ../descargas/Panel-Cabina-mac-arm64.zip Panel-Cabina-mac-arm64
+          zip -9 ../descargas/Panel-Cabina-mac-x64.zip Panel-Cabina-mac-x64
+          cp Panel-Cabina-win-x64.exe ../descargas/
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          name: Panel Cabina ${{ github.ref_name }}
+          files: descargas/*
+          body: |
+            ## Descargá el archivo de tu sistema
+
+            | Sistema | Archivo |
+            |---|---|
+            | **Windows** (10 / 11) | `Panel-Cabina-win-x64.exe` |
+            | **Mac con chip Apple** (M1, M2, M3, M4…) | `Panel-Cabina-mac-arm64.zip` |
+            | **Mac con procesador Intel** | `Panel-Cabina-mac-x64.zip` |
+
+            ¿Qué Mac tengo? Menú  → **Acerca de esta Mac**: si dice «Chip Apple M…» es la de chip Apple; si dice «Procesador Intel», la de Intel.
+
+            Copiá el archivo a una carpeta propia (no lo abras desde Descargas ni desde adentro del .zip) y hacé doble clic. Las instrucciones completas están en el [README](https://github.com/${{ github.repository }}#readme).
+
+            **Mac:** la primera vez, clic derecho sobre el archivo → **Abrir** → **Abrir**.
+            **Windows:** si aparece «Windows protegió su PC», tocá **Más información → Ejecutar de todas formas**, y en el aviso del Firewall tocá **Permitir acceso**.
