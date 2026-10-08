@@ -12,9 +12,22 @@
 //  se usa para LEER la diapositiva actual y el reloj.
 // ============================================================
 import type { Ajustes } from "../config";
+import { explicarFallo, type Linea } from "../red";
 import { registrar } from "../registro";
 
 export type EstadoWS = "desactivado" | "conectando" | "conectado" | "error" | "simulado";
+
+/** Si la otra compu no contesta (IP equivocada, otra red), el sistema puede tardar más de un minuto en avisar. */
+const APERTURA_MAX_MS = 8000;
+
+/** Respuesta de ProPresenter a "authenticate": bien, solo lectura (Observer) o rechazada. */
+function leerAutenticacion(m: any): "ok" | "observer" | "rechazada" {
+  const ok = m.authenticated === 1 || m.authenticated === true || m.authenticated === "1";
+  if (!ok) return "rechazada";
+  // Con la contraseña de «Observer» se conecta, pero ProPresenter ignora todas las órdenes.
+  return m.controller === 0 || m.controller === false || m.controller === "0" ? "observer" : "ok";
+}
+const MSG_OBSERVER = "Esa contraseña es de solo lectura (Observer). Usá la de «Controller» de ProPresenter → Preferencias → Red";
 
 /** Cliente WebSocket con reconexión automática. */
 class ClienteWS {
@@ -28,6 +41,8 @@ class ClienteWS {
   private intentos = 0;
   private activo = false;
   private ultimoError = "";
+  /** Motivo probable del último fallo de conexión (rango de red, puerto cerrado…). */
+  private pista = "";
 
   constructor(
     private nombre: string,
@@ -37,6 +52,8 @@ class ClienteWS {
     /** Recibe cada mensaje JSON; debe llamar a autenticado() o rechazado(). */
     private alMensaje: (m: any) => void,
     private alCambiar: () => void,
+    /** Averigua por qué no se pudo conectar (se muestra junto al error). */
+    private explicar: () => Promise<string>,
   ) {}
 
   poner(estado: EstadoWS, detalle = "") {
@@ -77,6 +94,7 @@ class ClienteWS {
   iniciar() {
     this.detener();
     this.activo = true;
+    this.pista = "";
     this.conectar();
   }
 
@@ -97,7 +115,16 @@ class ClienteWS {
     let ws: WebSocket;
     try { ws = new WebSocket(url); } catch (e: any) { this.poner("error", `Dirección inválida: ${e.message}`); return this.reintentar(); }
     this.ws = ws;
+    const timerApertura = setTimeout(() => {
+      if (this.ws !== ws) return;
+      this.ws = null;
+      ws.onopen = ws.onmessage = ws.onerror = ws.onclose = null;
+      try { ws.close(); } catch {}
+      this.falloConexion(url);
+      this.reintentar();
+    }, APERTURA_MAX_MS);
     ws.onopen = () => {
+      clearTimeout(timerApertura);
       this.timerAuth = setTimeout(() => {
         this.poner("error", "ProPresenter no respondió a la autenticación");
         try { ws.close(); } catch {}
@@ -108,14 +135,26 @@ class ClienteWS {
       this.ultimoMensaje = Date.now();
       try { this.alMensaje(JSON.parse(String(ev.data))); } catch { /* mensaje no JSON: se ignora */ }
     };
-    ws.onerror = () => { if (this.estado === "conectando") this.poner("error", `No se pudo conectar a ${url}`); };
+    ws.onerror = () => { clearTimeout(timerApertura); if (this.estado === "conectando") this.falloConexion(url); };
     ws.onclose = () => {
+      clearTimeout(timerApertura);
       if (this.ws !== ws) return;
       this.ws = null;
       if (this.timerAuth) clearTimeout(this.timerAuth);
       if (this.estado === "conectado") this.poner("error", "Conexión perdida, reconectando…");
       this.reintentar();
     };
+  }
+
+  /** No se pudo abrir la conexión: se agrega el motivo probable para que se sepa qué revisar. */
+  private falloConexion(url: string) {
+    const base = `No se pudo conectar a ${url}`;
+    this.poner("error", this.pista ? `${base}. ${this.pista}` : base);
+    this.explicar().then((p) => {
+      if (!this.activo || p === this.pista) return;
+      this.pista = p;
+      if (this.estado === "error" && this.detalle.startsWith(base)) this.poner("error", p ? `${base}. ${p}` : base);
+    }).catch(() => {});
   }
 
   private reintentar() {
@@ -162,13 +201,17 @@ export class ProPresenter {
     this.remote = new ClienteWS("ProPresenter Remote",
       () => `ws://${this.cfg.propresenter.ip}:${this.cfg.propresenter.puerto}/remote`,
       (env) => env({ action: "authenticate", protocol: "600", password: this.cfg.propresenter.passRemoto }),
-      (m) => this.mensajeRemote(m), alCambiar);
+      (m) => this.mensajeRemote(m), alCambiar,
+      () => explicarFallo(this.cfg.propresenter.ip, this.cfg.propresenter.puerto));
     this.stage = new ClienteWS("ProPresenter Stage Display",
-      () => `ws://${this.cfg.propresenter.ip}:${this.cfg.propresenter.puertoStage || this.cfg.propresenter.puerto}/stagedisplay`,
+      () => `ws://${this.cfg.propresenter.ip}:${this.puertoStage()}/stagedisplay`,
       (env) => env({ pwd: this.cfg.propresenter.passStage, ptl: 610, acn: "ath" }),
-      (m) => this.mensajeStage(m), alCambiar);
+      (m) => this.mensajeStage(m), alCambiar,
+      () => explicarFallo(this.cfg.propresenter.ip, this.puertoStage()));
     setInterval(() => this.latido(), LATIDO_MS);
   }
+
+  private puertoStage() { return this.cfg.propresenter.puertoStage || this.cfg.propresenter.puerto; }
 
   configurar(ajustes: Ajustes) {
     this.cfg = ajustes;
@@ -216,13 +259,9 @@ export class ProPresenter {
   private mensajeRemote(m: any) {
     switch (m.action) {
       case "authenticate": {
-        const ok = m.authenticated === 1 || m.authenticated === true || m.authenticated === "1";
-        if (!ok) { this.remote.rechazado(m.error ? `Contraseña rechazada por ProPresenter (${m.error})` : undefined); break; }
-        // Con la contraseña de «Observer» se conecta, pero ProPresenter ignora todas las órdenes.
-        if (m.controller === 0 || m.controller === false || m.controller === "0") {
-          this.remote.rechazado("Esa contraseña es de solo lectura (Observer). Usá la de «Controller» de ProPresenter → Preferencias → Red");
-          break;
-        }
+        const r = leerAutenticacion(m);
+        if (r === "rechazada") { this.remote.rechazado(m.error ? `Contraseña rechazada por ProPresenter (${m.error})` : undefined); break; }
+        if (r === "observer") { this.remote.rechazado(MSG_OBSERVER); break; }
         this.latidoConfirmado = false;
         this.remote.autenticado();
         break;
@@ -300,4 +339,31 @@ export class ProPresenter {
     this.hora = new Date().toLocaleTimeString("es-AR", { hour12: false });
     this.alCambiar();
   }
+}
+
+/**
+ * Prueba el Remote con los datos escritos en Ajustes, sin guardarlos: abre una conexión
+ * aparte, se autentica y la cierra. Dice si la contraseña sirve para controlar.
+ */
+export function probarRemote(ip: string, puerto: number, pass: string): Promise<Linea> {
+  return new Promise((listo) => {
+    let ws: WebSocket | null = null;
+    const fin = (l: Linea) => {
+      clearTimeout(t);
+      if (ws) { ws.onopen = ws.onmessage = ws.onerror = ws.onclose = null; try { ws.close(); } catch {} }
+      listo(l);
+    };
+    const t = setTimeout(() => fin({ ok: false, texto: "ProPresenter no contestó la autenticación. ¿Es el puerto de red de ProPresenter 6 y está activado «ProPresenter Remote»?" }), 6000);
+    try { ws = new WebSocket(`ws://${ip}:${puerto}/remote`); } catch (e: any) { return fin({ ok: false, texto: `Dirección inválida: ${e.message}` }); }
+    ws.onopen = () => ws?.send(JSON.stringify({ action: "authenticate", protocol: "600", password: pass }));
+    ws.onmessage = (ev) => {
+      let m: any; try { m = JSON.parse(String(ev.data)); } catch { return; }
+      if (m.action !== "authenticate") return;
+      const r = leerAutenticacion(m);
+      fin(r === "ok" ? { ok: true, texto: "ProPresenter aceptó la contraseña de «Controller»: se puede controlar" }
+        : r === "observer" ? { ok: false, texto: MSG_OBSERVER }
+        : { ok: false, texto: "ProPresenter rechazó la contraseña. Usá la de «Controller» (Preferencias → Red → ProPresenter Remote)" });
+    };
+    ws.onerror = () => fin({ ok: false, texto: "El puerto está abierto, pero no respondió como ProPresenter Remote. ¿Es el puerto correcto? ¿Está activado «ProPresenter Remote»?" });
+  });
 }

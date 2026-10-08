@@ -129,7 +129,7 @@ function num(v: any, def: number, min = -1e9, max = 1e9): number {
 }
 function color(v: any): string { return typeof v === "string" && /^#[0-9a-fA-F]{6}$/.test(v) ? v : "#334155"; }
 /** IP o nombre de la compu. Acepta errores comunes como "http://192.168.1.20:50001/" y deja solo "192.168.1.20". */
-function host(v: any, def: string): string {
+export function host(v: any, def: string): string {
   let s = txt(v, 100, def).trim().replace(/^[a-z]+:\/\//i, "").replace(/\/.*$/, "");
   if (/^[^:]+:\d*$/.test(s)) s = s.slice(0, s.indexOf(":"));
   return s.replace(/\s+/g, "") || def;

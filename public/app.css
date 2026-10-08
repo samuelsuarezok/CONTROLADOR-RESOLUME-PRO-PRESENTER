@@ -156,6 +156,24 @@ input:focus, select:focus, textarea:focus { outline: 2px solid var(--info); bord
 .toast b { display: block; margin-bottom: 2px; } .toast div { color: var(--txt2); font-size: 13.5px; white-space: pre-line; }
 .segmentos { display: flex; gap: 8px; flex-wrap: wrap; }
 
+/* ----- Red de esta compu (Ajustes) ----- */
+.modal .ayuda { font-size: 12.5px; color: var(--txt2); margin-top: 3px; }
+.ayuda-txt { color: var(--txt2); font-size: 13px; margin-top: 0; }
+.red-info { list-style: none; padding: 0; margin: 0 0 4px; font-size: 14px; }
+.red-info li { background: var(--panel2); border-radius: 8px; padding: 7px 10px; margin-bottom: 4px; word-break: break-word; }
+.red-info li.apagado { color: var(--txt2); }
+.red-info li.mal, .avisos li.mal { color: var(--warn); }
+.rango:empty { display: none; }
+.rango.local, .rango.misma { color: var(--ok); } .rango.fuera { color: var(--warn); font-weight: 600; }
+.diag:empty { display: none; }
+.diag { background: #0e141b; border: 1px solid var(--borde); border-radius: 10px; padding: 4px 12px 10px; margin-top: 10px; }
+.diag h4 { margin: 10px 0 4px; font-size: 14px; }
+.diag .linea { font-size: 14px; padding: 2px 0; } .diag .ok { color: var(--ok); } .diag .mal { color: var(--err); } .diag .aviso { color: var(--warn); }
+.estado-red { background: var(--panel2); border-radius: 10px; padding: 8px 12px; margin-bottom: 12px; font-size: 14px; }
+.estado-red > div { margin: 3px 0; } .estado-red .rango { display: inline; }
+.sugerencias { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 10px; }
+.avisos { color: var(--txt2); font-size: 13.5px; padding-left: 18px; line-height: 1.5; margin-bottom: 0; }
+
 @keyframes pulso { from { filter: brightness(1); } to { filter: brightness(1.45); } }
 @keyframes parpadeo { 50% { opacity: .3; } }
 /* ----- Celulares ----- */

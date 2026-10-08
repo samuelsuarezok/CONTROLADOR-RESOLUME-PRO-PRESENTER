@@ -6,18 +6,19 @@ import type { Server, ServerWebSocket } from "bun";
 import { ejecutarAccion, ejecutarBoton, type Contexto } from "./acciones";
 import { guardarJSON, leerJSON } from "./almacen";
 import {
-  aplicarOperacion, buscarBoton, exportarConfig, limpiarAccion, obtenerConfig, PIN_POR_DEFECTO, vistaPublica,
+  aplicarOperacion, buscarBoton, exportarConfig, host, limpiarAccion, obtenerConfig, PIN_POR_DEFECTO, vistaPublica,
   type Accion,
 } from "./config";
 import { ARCHIVOS } from "./embebidos";
-import { ProPresenter } from "./integraciones/propresenter";
+import { ProPresenter, probarRemote } from "./integraciones/propresenter";
 import { Resolume } from "./integraciones/resolume";
-import { ipsLocales } from "./red";
+import { aplicarIP, describirPedido, listarAdaptadores, SISTEMA, validarPedido } from "./ipcompu";
+import { diagnosticarRed, esEstaCompu, ipsLocales, todasLasIps } from "./red";
 import { qrSvg } from "./qr";
 import { alRegistrar, registrar, ultimas } from "./registro";
 
 export const APP_NOMBRE = "Panel Cabina";
-export const APP_VERSION = "1.1.0";
+export const APP_VERSION = "1.2.0";
 
 interface DatosWS { id: number; ip: string; editor: boolean }
 type WS = ServerWebSocket<DatosWS>;
@@ -64,6 +65,60 @@ const intentos = new Map<string, { fallos: number; hasta: number }>();
 
 // ---------- Ejecución de botones ----------
 const enCurso = new Set<string>();
+
+// ---------- Red de esta compu ----------
+let cambiandoIP = false;
+const puertoValido = (v: any, def: number) => { const n = Number(v); return Number.isInteger(n) && n > 0 && n < 65536 ? n : def; };
+
+/** Revisa la red hasta ProPresenter y Resolume con los datos escritos en Ajustes (aunque no estén guardados). */
+async function diagnostico(m: any) {
+  const a = obtenerConfig().ajustes;
+  const ppIp = host(m.pp?.ip, a.propresenter.ip), ppPuerto = puertoValido(m.pp?.puerto, a.propresenter.puerto);
+  const rsIp = host(m.rs?.ip, a.resolume.ip), rsPuerto = puertoValido(m.rs?.puerto, a.resolume.puerto);
+  const pass = typeof m.pp?.pass === "string" ? m.pp.pass : a.propresenter.passRemoto;
+  const [pp, rs] = await Promise.all([
+    diagnosticarRed(ppIp, ppPuerto, true).then(async (d) => d.puertoAbierto ? [...d.lineas, await probarRemote(ppIp, ppPuerto, pass)] : d.lineas),
+    diagnosticarRed(rsIp, rsPuerto, false).then((d) => d.lineas),
+  ]);
+  return { t: "diagnostico", pp: { destino: `${ppIp}:${ppPuerto}`, lineas: pp }, rs: { destino: `${rsIp}:${rsPuerto}`, lineas: rs } };
+}
+
+async function cambiarIP(ws: WS, pedidoCrudo: any) {
+  const contestar = (ok: boolean, msg: string, extra = {}) => responder(ws, { t: "ipCambiada", ok, msg, ...extra });
+  // El permiso de administrador aparece en ESTA compu: no tiene sentido (ni es seguro) pedirlo desde un celular.
+  if (!esEstaCompu(ws.data.ip)) return contestar(false, "Por seguridad, la IP solo se puede cambiar desde la compu donde corre el panel.");
+  if (cambiandoIP) return contestar(false, "Ya hay un cambio de IP en curso.");
+  cambiandoIP = true;
+  try {
+    const adaptadores = await listarAdaptadores();
+    const pedido = validarPedido(pedidoCrudo, adaptadores);
+    const desc = describirPedido(pedido);
+    // Windows da error si se pide DHCP y ya estaba en DHCP: no hace falta molestar con el permiso.
+    if (pedido.modo === "dhcp" && adaptadores.find((a) => a.nombre === pedido.adaptador)?.dhcp === true) {
+      return contestar(true, `«${pedido.adaptador}» ya estaba en automática (DHCP): no hacía falta cambiar nada.`);
+    }
+    if (obtenerConfig().ajustes.simulacion) {
+      registrar("info", `[SIM] Se cambiaría la red de esta compu: ${desc}`);
+      return contestar(true, `Modo simulación: no se cambió nada (se pondría ${desc}).`, { sim: true });
+    }
+    registrar("info", `Cambiando la red de esta compu: ${desc}. Confirmá el permiso de administrador en la pantalla…`);
+    await aplicarIP(pedido);
+    registrar("ok", `Red de esta compu: ${desc}`);
+    const puerto = servidor.port;
+    console.log(`\n  ✔ Se cambió la red de esta compu: ${desc}`);
+    if (pedido.modo === "manual") console.log(`    Nueva dirección para los celulares: http://${pedido.ip}:${puerto}   (QR: http://localhost:${puerto}/conectar)\n`);
+    else console.log(`    Mirá la dirección nueva en http://localhost:${puerto}/conectar\n`);
+    setTimeout(aplicarAjustes, 2000); // reconectar enseguida, ya con la IP nueva
+    contestar(true, pedido.modo === "manual"
+      ? `Esta compu ahora es ${pedido.ip} en «${pedido.adaptador}». Los celulares que entraban por esa red tienen que volver a escanear el QR (📱).`
+      : `«${pedido.adaptador}» quedó en automática. La IP nueva puede tardar unos segundos.`);
+  } catch (e: any) {
+    registrar("error", `No se pudo cambiar la IP: ${e.message}`);
+    contestar(false, e.message);
+  } finally {
+    cambiandoIP = false;
+  }
+}
 
 async function ejecutarPorId(id: string) {
   const boton = buscarBoton(id);
@@ -173,6 +228,22 @@ async function alMensaje(ws: WS, crudo: string) {
     case "exportar":
       if (!necesitaEditor()) break;
       responder(ws, { t: "exportar", datos: exportarConfig() });
+      break;
+
+    case "red": // adaptadores de red de esta compu (para Ajustes → Red)
+      if (!necesitaEditor()) break;
+      responder(ws, {
+        t: "red", adaptadores: await listarAdaptadores(), propias: todasLasIps(),
+        local: esEstaCompu(ws.data.ip), sistema: SISTEMA, puerto: servidor.port,
+      });
+      break;
+    case "diagnostico":
+      if (!necesitaEditor()) break;
+      responder(ws, await diagnostico(m));
+      break;
+    case "cambiarIP":
+      if (!necesitaEditor()) break;
+      await cambiarIP(ws, m.pedido);
       break;
   }
 }

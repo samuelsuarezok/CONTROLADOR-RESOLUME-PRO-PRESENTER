@@ -73,7 +73,8 @@ El panel está **bloqueado** por defecto: cualquiera puede usar los botones, per
 1. En ProPresenter: **Preferencias → Red**. Activá **«Habilitar red»** y anotá el **puerto**.
 2. Activá **ProPresenter Remote** → **Controller** y poné una contraseña. Usá la de **Controller**, no la de *Observer*: con la de Observer, ProPresenter conecta pero ignora todas las órdenes (el panel lo avisa con un error).
 3. Si querés ver en el panel la diapositiva actual y el reloj, activá también **Stage Display App** y poné su contraseña.
-4. En el panel: ⚙️ **Ajustes** → ProPresenter. Cargá la **IP** de la compu de ProPresenter (`127.0.0.1` si es la misma que corre el panel), el **puerto** y las contraseñas. Escribí solo la IP (por ejemplo `192.168.1.20`); si pegás algo como `http://192.168.1.20:50001/`, el panel se queda con la IP sola.
+4. En el panel: ⚙️ **Ajustes** → ProPresenter. Cargá la **IP** de la compu de ProPresenter (`127.0.0.1` si es la misma que corre el panel), el **puerto** y las contraseñas. Escribí solo la IP (por ejemplo `192.168.1.20`); si pegás algo como `http://192.168.1.20:50001/`, el panel se queda con la IP sola. Debajo de la IP aparece si está **en la misma red** que esta compu (✔) o **fuera de rango** (⚠). Ver la sección 7.
+5. Tocá **🔎 Probar conexión** (en Ajustes → Red de esta compu): prueba la IP, el puerto y la contraseña **antes de guardar** y dice qué falla.
 
 Todas las órdenes, incluidos los **mensajes al Stage Display**, van por la conexión Remote. La conexión Stage Display solo se usa para *leer* la diapositiva actual y el reloj: si no conecta, todo lo demás funciona igual.
 
@@ -116,11 +117,37 @@ Para casos especiales usá la acción **«Mensaje OSC personalizado»** (direcci
 
 > **Sobre el estado de Resolume:** OSC por UDP no confirma que Resolume recibió el mensaje. Por eso el estado normal es **«Listo»** (el envío funciona), no «Conectado». Si querés que diga «Conectado», en Resolume activá **OSC Output** apuntando a la IP de este panel y poné ese puerto en Ajustes → «Puerto para recibir respuestas».
 
-## 7. Modo simulación
+## 7. Red: poner esta compu «en rango»
 
-⚙️ Ajustes → **Modo simulación**. El panel funciona completo (botones, estados, diapositiva y reloj de prueba) sin ProPresenter ni Resolume. Todo lo que se enviaría queda en el **registro** de la pestaña Manual. Ideal para ensayar la botonera. Recordá **desactivarlo** antes del evento.
+Para que el panel llegue a ProPresenter y Resolume, las compus tienen que estar **en la misma red**: los tres primeros números de la IP iguales y el último distinto en cada una. Por ejemplo, ProPresenter en `192.168.0.10` y el panel en `192.168.0.200`. Si una está en `192.168.0.x` y la otra en `192.168.1.x`, **no se ven**, aunque estén enchufadas al mismo cable o switch.
 
-## 8. Solución de problemas
+Lo mismo pasa si unís dos compus con un cable directo, o con un switch sin router: nadie reparte IP y cada compu queda con una `169.254.x.x` o con una IP vieja.
+
+En ⚙️ **Ajustes → Red de esta compu** vas a ver:
+
+- **Las redes de esta compu** (wifi, cable…) con su IP y si es automática o manual.
+- **🔎 Probar conexión**: revisa, con lo que escribiste en Ajustes (aunque no esté guardado):
+  - si ProPresenter y Resolume están en la misma red que esta compu;
+  - si la otra compu aparece en la red (por ping o, si el firewall bloquea el ping, por la tabla de la red);
+  - si ProPresenter acepta conexiones en ese puerto y si la contraseña es la de **Controller**;
+  - si en esta misma compu hay un programa (Resolume) escuchando OSC en ese puerto.
+- **🌐 Cambiar IP de esta compu**: elegís el adaptador (cable o wifi), **Manual** con la IP que quieras, o **Automática (DHCP)** para volver a como estaba. Si ProPresenter o Resolume están fuera de rango, el panel sugiere una IP (por ejemplo `192.168.0.200`) con un toque.
+
+Al tocar «Aplicar», **la compu pide permiso de administrador**: en Windows, «¿Quieres permitir que esta aplicación haga cambios en el dispositivo?» → **Sí**; en Mac, tu contraseña de usuario. Por eso (y por seguridad) la IP **solo se cambia desde la compu donde corre el panel**, abriéndolo como `http://localhost:3002`; desde un celular aparece el aviso.
+
+Tené en cuenta:
+- El último número no lo puede usar otro equipo de la red (por eso se sugiere `.200`).
+- La **puerta de enlace** es opcional: sin ella esa conexión no da internet, pero el panel no la necesita. En Mac, si el sistema la pide, poné la IP del router (o, si no hay router, la de la compu de ProPresenter).
+- Si los celulares se conectan por el mismo adaptador que cambiaste, se desconectan: volvé a escanear el QR (📱). La ventana negra muestra la dirección nueva.
+- Para volver atrás: mismo botón → **Automática (DHCP)**.
+
+Si la conexión con ProPresenter falla, **tocá la etiqueta «ProPresenter»** de la barra de arriba: ahora dice el motivo (fuera de la red, la compu no aparece, nada escucha en el puerto, firewall…). Al abrir el programa, la ventana negra también avisa si ProPresenter o Resolume están fuera de la red de esta compu.
+
+## 8. Modo simulación
+
+⚙️ Ajustes → **Modo simulación**. El panel funciona completo (botones, estados, diapositiva y reloj de prueba) sin ProPresenter ni Resolume. Todo lo que se enviaría queda en el **registro** de la pestaña Manual. Ideal para ensayar la botonera. Recordá **desactivarlo** antes del evento. En modo simulación, «Cambiar IP de esta compu» tampoco cambia nada: solo revisa los datos y anota en el registro lo que haría.
+
+## 9. Solución de problemas
 
 **El celular no abre la página**
 - ¿Está en la **misma wifi** que la compu? (no vale datos móviles)
@@ -132,8 +159,14 @@ Para casos especiales usá la acción **«Mensaje OSC personalizado»** (direcci
 - Si la compu recibe una IP distinta, la dirección del celular deja de servir. Volvé a escanear el QR. Lo ideal es **reservar una IP fija** para la compu en el router (reserva DHCP).
 - Lo mismo para la IP de ProPresenter/Resolume en Ajustes.
 
+**Las compus no se ven (distinta red)**
+- En ⚙️ Ajustes → Red de esta compu, tocá **🔎 Probar conexión**. Si dice «no está en la red de esta compu», usá **🌐 Cambiar IP de esta compu** (sección 7).
+
 **ProPresenter figura «Error» o «Conectando…»**
-- Revisá IP, puerto y contraseña (tocá la etiqueta de estado para ver el detalle).
+- Tocá la etiqueta de estado: el detalle dice el motivo probable. Después usá **🔎 Probar conexión** en Ajustes.
+- «Nada escucha en el puerto»: ProPresenter cerrado, «Habilitar red» apagado o número de puerto distinto.
+- «Está en la red, pero no contesta en el puerto»: el **firewall** de la compu de ProPresenter lo bloquea (permití ProPresenter en el Firewall de Windows / macOS).
+- «No se encontró ninguna compu con esa IP»: está apagada, tiene otra IP o la wifi no deja que los equipos se vean (red de invitados).
 - Confirmá que en ProPresenter esté habilitada la red y el Remoto.
 - Si el detalle dice **«solo lectura (Observer)»**, cargaste la contraseña de Observer: poné la de **Controller**.
 
@@ -175,7 +208,8 @@ En Windows también podés hacer doble clic en `build.bat`.
 3. GitHub Actions (`.github/workflows/publicar.yml`) corre la prueba, compila en una Mac (así los ejecutables de Mac quedan firmados) y publica los tres archivos en **Releases**. Si la prueba falla, no se publica nada.
 
 ```
-src/            servidor (Bun): HTTP/WebSocket, acciones, integraciones, almacenamiento
+src/            servidor (Bun): HTTP/WebSocket, acciones, integraciones, almacenamiento,
+                red.ts (rango y diagnóstico de red), ipcompu.ts (cambiar la IP de esta compu)
   integraciones/  resolume.ts (OSC/UDP), propresenter.ts (WebSocket), osc.ts
 public/         interfaz web (se embebe dentro del ejecutable)
 scripts/        build.ts, embeber.ts, prueba.ts

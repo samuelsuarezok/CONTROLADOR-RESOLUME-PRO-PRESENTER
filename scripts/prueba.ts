@@ -11,11 +11,32 @@ import dgram from "node:dgram";
 import { mkdtempSync, writeFileSync, mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { validarPedido } from "../src/ipcompu";
+import { mascaraDePrefijo, mismaRed, prefijoDeMascara, sugerirIP } from "../src/red";
 
 const PUERTO_PANEL = 3555, PUERTO_PP = 50555, PUERTO_OSC = 7555;
 let fallos = 0;
 const ok = (c: boolean, msg: string) => { console.log(`${c ? "✔" : "✖"} ${msg}`); if (!c) fallos++; };
 const espera = (ms: number) => new Promise((r) => setTimeout(r, ms));
+async function esperarQue(cond: () => unknown, ms: number) {
+  for (const fin = Date.now() + ms; Date.now() < fin && !cond();) await espera(100);
+}
+
+// --- Cuentas de red (sin tocar la red real) ---
+ok(prefijoDeMascara("255.255.255.0") === 24 && prefijoDeMascara("255.0.255.0") === null && mascaraDePrefijo(16) === "255.255.0.0",
+  "Máscaras de red: 255.255.255.0 = /24, y una máscara inválida se detecta");
+ok(mismaRed("192.168.0.10", "192.168.0.200", "255.255.255.0") && !mismaRed("192.168.0.10", "192.168.1.20", "255.255.255.0"),
+  "Se detecta si dos IP están en la misma red");
+ok(sugerirIP("192.168.0.10")?.ip === "192.168.0.200" && sugerirIP("10.0.5.200")?.ip === "10.0.5.201", "La IP sugerida queda en la red del destino");
+const adaptadoresFalsos = [{ nombre: "Ethernet 2", ips: [], dhcp: true, conectado: true }, { nombre: 'Raro"x', ips: [], dhcp: true, conectado: true }];
+const pedidoOk = validarPedido({ adaptador: "Ethernet 2", modo: "manual", ip: "192.168.0.200", mascara: "/24", puerta: "" }, adaptadoresFalsos);
+ok(pedidoOk.mascara === "255.255.255.0", "Una máscara escrita como /24 se convierte en 255.255.255.0");
+const rechaza = (p: any) => { try { validarPedido(p, adaptadoresFalsos); return ""; } catch (e: any) { return e.message; } };
+ok(/no es una IP válida/.test(rechaza({ adaptador: "Ethernet 2", modo: "manual", ip: "192.168.0.300", mascara: "255.255.255.0" }))
+  && /difusión/.test(rechaza({ adaptador: "Ethernet 2", modo: "manual", ip: "192.168.0.255", mascara: "255.255.255.0" }))
+  && /misma red/.test(rechaza({ adaptador: "Ethernet 2", modo: "manual", ip: "192.168.0.200", mascara: "255.255.255.0", puerta: "10.0.0.1" }))
+  && /caracteres no permitidos/.test(rechaza({ adaptador: 'Raro"x', modo: "dhcp" })),
+  "Un cambio de IP mal escrito se rechaza antes de tocar la red");
 
 // --- ProPresenter 6 falso ---
 const recibidosPP: any[] = [];
@@ -152,6 +173,52 @@ ws.send(JSON.stringify({ t: "ejecutar", id: "b1" })); await espera(700);
 const fin2 = mensajes.find((m) => m.t === "ejec" && m.fase === "fin");
 ok(fin2?.ok === false && fin2.pasos.some((p: any) => !p.ok && /no está conectado/.test(p.error)), "Con ProPresenter caído el botón informa el error por paso");
 ok(fin2?.pasos.filter((p: any) => p.ok).length >= 2, "Las acciones de Resolume se ejecutan igual aunque falle ProPresenter");
+
+// El estado de ProPresenter explica el motivo (acá: nada escucha en ese puerto)
+await esperarQue(() => /Nada escucha en el puerto 50999/.test(ultimo("con")?.pp?.remote?.detalle ?? ""), 8000);
+ok(/Nada escucha en el puerto 50999/.test(ultimo("con")?.pp?.remote?.detalle ?? ""), "Si ProPresenter no conecta, el estado explica el motivo (puerto cerrado)");
+
+// --- Ajustes → Red ---
+ws.send(JSON.stringify({ t: "red" }));
+await esperarQue(() => ultimo("red"), 15000);
+const red = ultimo("red");
+ok(Array.isArray(red?.adaptadores) && Array.isArray(red?.propias) && red?.local === true, "Ajustes → Red: llegan los adaptadores y se reconoce que el pedido viene de esta compu");
+
+const lineas = (d: any) => (d?.lineas ?? []).map((l: any) => `${l.ok}: ${l.texto}`).join("\n");
+async function diagnostico(pp: object, rs: object = { ip: "127.0.0.1", puerto: PUERTO_OSC }) {
+  mensajes.length = 0;
+  ws.send(JSON.stringify({ t: "diagnostico", pp, rs }));
+  await esperarQue(() => ultimo("diagnostico"), 20000);
+  return ultimo("diagnostico");
+}
+let d = await diagnostico({ ip: "127.0.0.1", puerto: PUERTO_PP, pass: "clave" });
+ok(/true: .*acepta conexiones/.test(lineas(d?.pp)) && /true: .*aceptó la contraseña/.test(lineas(d?.pp)), "«Probar conexión» confirma el puerto y la contraseña de ProPresenter");
+ok(/true: .*escuchando OSC/.test(lineas(d?.rs)), "«Probar conexión» detecta que Resolume escucha en su puerto (misma compu)");
+d = await diagnostico({ ip: "127.0.0.1", puerto: PUERTO_PP, pass: "observador" });
+ok(/false: .*Observer/.test(lineas(d?.pp)), "«Probar conexión» avisa si la contraseña es la de Observer");
+d = await diagnostico({ ip: "127.0.0.1", puerto: 50999, pass: "clave" });
+ok(/false: Nada escucha en el puerto 50999/.test(lineas(d?.pp)), "«Probar conexión» avisa si nada escucha en el puerto de ProPresenter");
+
+// --- Cambiar la IP de esta compu (nunca se toca la red real: lo válido solo en simulación) ---
+async function cambiarIP(pedido: object) {
+  mensajes.length = 0;
+  ws.send(JSON.stringify({ t: "cambiarIP", pedido }));
+  await esperarQue(() => ultimo("ipCambiada"), 20000);
+  return ultimo("ipCambiada");
+}
+let r = await cambiarIP({ adaptador: "NO-EXISTE", modo: "manual", ip: "192.168.77.200", mascara: "255.255.255.0" });
+ok(r?.ok === false && /no existe/.test(r.msg), "Cambiar IP: un adaptador que no existe se rechaza");
+const adaptador = red?.adaptadores?.find((a: any) => !/["%|]/.test(a.nombre))?.nombre;
+if (adaptador) {
+  r = await cambiarIP({ adaptador, modo: "manual", ip: "192.168.77.0", mascara: "255.255.255.0" });
+  ok(r?.ok === false && /difusión/.test(r.msg), "Cambiar IP: la dirección de red (.0) se rechaza");
+  ws.send(JSON.stringify({ t: "editar", operacion: { op: "ajustes.guardar", ajustes: { simulacion: true } } }));
+  await esperarQue(() => ultimo("ajustes")?.ajustes?.simulacion === true, 3000);
+  if (ultimo("ajustes")?.ajustes?.simulacion === true) {
+    r = await cambiarIP({ adaptador, modo: "manual", ip: "192.168.77.200", mascara: "255.255.255.0", puerta: "" });
+    ok(r?.ok === true && r.sim === true && /192\.168\.77\.200/.test(r.msg), "Cambiar IP en modo simulación: se valida y no se toca la red");
+  } else ok(false, "No se pudo activar el modo simulación para probar el cambio de IP");
+} else console.log("  (sin adaptadores de red: se saltea la prueba de cambio de IP)");
 
 ws.close(); panel.kill(); udp.close();
 console.log(fallos ? `\n${fallos} prueba(s) fallaron` : "\nTodo OK");

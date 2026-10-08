@@ -3,8 +3,8 @@
 //  Levanta el servidor y muestra cómo conectarse desde el celular.
 // ============================================================
 import { CARPETA_DATOS, vaciarPendientes } from "./almacen";
-import { PUERTO_POR_DEFECTO } from "./config";
-import { ipsLocales } from "./red";
+import { obtenerConfig, PUERTO_POR_DEFECTO } from "./config";
+import { avisoRango, ipsLocales } from "./red";
 import { qrAscii } from "./qr";
 
 /** Puerto: --puerto=NNNN, o variable PORT, o 3002. */
@@ -40,6 +40,12 @@ async function principal() {
     console.log("\n  O escaneá este código QR con la cámara del celular:\n");
     console.log(qrAscii(`http://${ips[0]!.ip}:${puerto}`).split("\n").map((l) => "    " + l).join("\n"));
     if (ips.length > 1) console.log("\n  (El QR usa la primera dirección. Si no abre, probá con otra de la lista.)");
+  }
+  // ¿ProPresenter y Resolume están en la misma red que esta compu?
+  const { propresenter, resolume } = obtenerConfig().ajustes;
+  for (const [nombre, ip] of [["ProPresenter", propresenter.ip], ["Resolume", resolume.ip]] as const) {
+    const aviso = avisoRango(ip);
+    if (aviso) console.log(`\n  ⚠ ${nombre}: ${aviso}`);
   }
   console.log(`\n  Página con la dirección y el QR: http://localhost:${puerto}/conectar`);
   console.log(`  Datos guardados en: ${CARPETA_DATOS}`);

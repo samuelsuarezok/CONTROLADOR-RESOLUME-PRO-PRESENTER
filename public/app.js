@@ -18,6 +18,8 @@
     mios: new Set(),        // botones tocados desde ESTE dispositivo (para mostrar el detalle del error)
     ws: null, red: 'conectando',
     msgStage: '',           // texto escrito para el Stage Display (sobrevive a los redibujos)
+    redCompu: null,         // adaptadores de red de la compu del panel (Ajustes → Red)
+    alRed: null, alDiag: null, alIP: null, // quién espera cada respuesta de red (la ventana abierta)
   };
 
   // ---------- Utilidades ----------
@@ -167,6 +169,12 @@
       case 'accionError': toast('Falló la acción', m.msg, 'error', 5000); break;
       case 'accionOk': marcarManual(m.ref, true); break;
       case 'prueba': mostrarPrueba(m); break;
+      case 'red': S.redCompu = m; if (S.alRed) S.alRed(); break;
+      case 'diagnostico': if (S.alDiag) S.alDiag(m); break;
+      case 'ipCambiada':
+        if (S.alIP) S.alIP(m);
+        else toast(m.ok ? 'IP cambiada' : 'No se pudo cambiar la IP', m.msg, m.ok ? 'ok' : 'error', 9000);
+        break;
     }
   }
 
@@ -579,11 +587,12 @@
     if (!S.ajustes) return toast('Cargando…', 'Probá de nuevo en un instante.');
     const A = structuredClone(S.ajustes);
     let cerrar;
-    const campo = (et, obj, k, tipo = 'text', ayuda, extra = {}) => {
+    const campo = (et, obj, k, tipo = 'text', ayuda, extra = {}, alCambiar) => {
       const i = h('input', { type: tipo, value: obj[k], inputMode: tipo === 'number' ? 'numeric' : undefined, ...extra });
       i.oninput = () => {
         if (tipo !== 'number') obj[k] = i.value;
         else if (i.value.trim() !== '' && Number.isFinite(Number(i.value))) obj[k] = Number(i.value); // vacío: se deja el valor anterior
+        if (alCambiar) alCambiar();
       };
       return h('div', { class: 'campo' }, h('label', {}, et), i, ayuda ? h('div', { class: 'ayuda' }, ayuda) : null);
     };
@@ -600,21 +609,53 @@
       } catch { toast('Archivo inválido', 'No es un JSON de configuración válido.', 'error'); }
     };
 
+    // ----- Red: ¿esta compu está en la misma red que ProPresenter y Resolume? -----
+    const infoRed = h('ul', { class: 'red-info' }, h('li', {}, 'Buscando las redes de esta compu…'));
+    const diag = h('div', { class: 'diag' });
+    const rangoPP = h('div', { class: 'ayuda rango' }), rangoRS = h('div', { class: 'ayuda rango' });
+    const pintarRangos = () => { pintarRango(rangoPP, A.propresenter.ip); pintarRango(rangoRS, A.resolume.ip); };
+    S.alRed = () => {
+      if (!infoRed.isConnected) { S.alRed = null; return; }
+      pintarRangos();
+      infoRed.textContent = '';
+      if (!S.redCompu.adaptadores.length) infoRed.append(h('li', { class: 'mal' }, '⚠ Esta compu no está conectada a ninguna red (wifi o cable).'));
+      for (const a of S.redCompu.adaptadores) infoRed.append(h('li', { class: a.conectado ? '' : 'apagado' }, textoAdaptador(a)));
+    };
+    if (S.redCompu) S.alRed();
+    enviar({ t: 'red' });
+    const campoIP = (et, obj, aviso) => {
+      const c = campo(et, obj, 'ip', 'text', '127.0.0.1 si es esta misma compu', { placeholder: '192.168.1.20', autocapitalize: 'off' }, pintarRangos);
+      c.append(aviso);
+      return c;
+    };
+    const bProbar = h('button', { class: 'b', onclick: () => {
+      const pedido = { t: 'diagnostico', pp: { ip: A.propresenter.ip, puerto: A.propresenter.puerto, pass: A.propresenter.passRemoto }, rs: { ip: A.resolume.ip, puerto: A.resolume.puerto } };
+      if (!enviar(pedido)) return toast('Sin conexión', 'El panel no está conectado al servidor.', 'error');
+      bProbar.disabled = true;
+      diag.textContent = ''; diag.append(h('p', {}, '⏳ Probando la conexión… (puede tardar unos segundos)'));
+      S.alDiag = (m) => { S.alDiag = null; bProbar.disabled = false; if (diag.isConnected) pintarDiagnostico(diag, m); };
+    } }, '🔎 Probar conexión');
+
     cerrar = modal([
       h('h2', {}, '⚙️ Ajustes'),
       check('Modo simulación (probar sin ProPresenter ni Resolume)', A, 'simulacion'),
       h('h3', {}, 'ProPresenter 6'),
       h('div', { class: 'dos' },
-        campo('IP de la compu con ProPresenter', A.propresenter, 'ip', 'text', '127.0.0.1 si es esta misma compu', { placeholder: '192.168.1.20', autocapitalize: 'off' }),
+        campoIP('IP de la compu con ProPresenter', A.propresenter, rangoPP),
         campo('Puerto de red', A.propresenter, 'puerto', 'number', 'Preferencias > Red > Puerto')),
       campo('Contraseña de Remote («Controller»)', A.propresenter, 'passRemoto', 'password', 'La de «Controller», no la de «Observer»: con esa ProPresenter ignora las órdenes.'),
       check('Usar Stage Display (para ver la diapositiva actual y el reloj)', A.propresenter, 'usarStage'),
       h('div', { class: 'dos' }, campo('Contraseña de Stage Display', A.propresenter, 'passStage', 'password'), campo('Puerto del Stage (0 = el mismo)', A.propresenter, 'puertoStage', 'number')),
       h('h3', {}, 'Resolume Arena 6 (OSC)'),
       h('div', { class: 'dos' },
-        campo('IP de la compu con Resolume', A.resolume, 'ip', 'text', '127.0.0.1 si es esta misma compu', { placeholder: '192.168.1.20', autocapitalize: 'off' }),
+        campoIP('IP de la compu con Resolume', A.resolume, rangoRS),
         campo('Puerto de entrada de Resolume', A.resolume, 'puerto', 'number', 'Preferencias > OSC (por defecto 7000)')),
       campo('Puerto para recibir respuestas (0 = no)', A.resolume, 'puertoEntrada', 'number', 'Opcional: si Resolume envía OSC a este puerto, el estado pasa a «Conectado».'),
+      h('h3', {}, 'Red de esta compu'),
+      h('p', { class: 'ayuda-txt' }, 'Para conectar, esta compu tiene que estar en la misma red que las de ProPresenter y Resolume: los tres primeros números de la IP iguales (por ejemplo 192.168.0.x) y el último distinto en cada compu.'),
+      infoRed,
+      h('div', { class: 'fila-msg' }, bProbar, h('button', { class: 'b', onclick: () => abrirCambioIP(A) }, '🌐 Cambiar IP de esta compu')),
+      diag,
       h('h3', {}, 'Direcciones OSC de Resolume'),
       h('p', { style: 'color:var(--txt2);font-size:13px;margin-top:0' }, 'Usá {n} para el número, o {capa} y {clip}. Verificalas con el modo de edición de atajos OSC de Resolume.'),
       ...[['columna', 'Disparar columna'], ['clip', 'Disparar clip'], ['limpiarCapa', 'Limpiar capa'], ['opacidadCapa', 'Opacidad de capa'], ['opacidadMaster', 'Opacidad master'], ['desconectarTodo', 'Desconectar todo']].map(([k, et]) => campo(et, A.osc, k)),
@@ -636,6 +677,143 @@
           if (pin && op({ op: 'pin.cambiar', nuevo: pin })) S.pinMem = pin; // para volver a entrar solo si se corta la conexión
           cerrar(); toast('Ajustes guardados', pin ? 'También se cambió el PIN.' : '', 'ok');
         } }, 'Guardar')),
+    ]);
+  }
+
+  // ---------- Red de esta compu ----------
+  const esIPv4 = (s) => /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.test(s) && s.split('.').every((o) => Number(o) <= 255);
+  const redDe = (ip, mascara) => ip.split('.').map((o, i) => Number(o) & Number(mascara.split('.')[i])).join('.');
+  /** Igual que el servidor: "http://192.168.1.20:50001/" -> "192.168.1.20". */
+  function limpiarHost(v) {
+    let s = String(v || '').trim().replace(/^[a-z]+:\/\//i, '').replace(/\/.*$/, '');
+    if (/^[^:]+:\d*$/.test(s)) s = s.slice(0, s.indexOf(':'));
+    return s.replace(/\s+/g, '');
+  }
+  /** IP para esta compu dentro de la red de `destino` (el último número, 200; o 201 si 200 es el destino). */
+  function sugerida(destino) {
+    const o = destino.split('.'), fin = o[3] === '200' ? '201' : '200';
+    return o[0] === '169' && o[1] === '254' ? { ip: `169.254.${o[2]}.${fin}`, mascara: '255.255.0.0' } : { ip: `${o[0]}.${o[1]}.${o[2]}.${fin}`, mascara: '255.255.255.0' };
+  }
+  function rangoDe(valor) {
+    const ip = limpiarHost(valor), R = S.redCompu;
+    if (!ip || !R) return null;
+    if (ip === 'localhost' || ip.startsWith('127.') || R.propias.some((p) => p.ip === ip)) return { tipo: 'local' };
+    if (!esIPv4(ip)) return { tipo: 'nombre' };
+    const via = R.propias.find((p) => redDe(p.ip, p.mascara) === redDe(ip, p.mascara));
+    return via ? { tipo: 'misma', via } : { tipo: 'fuera', ip };
+  }
+  function pintarRango(el, valor, enVentanaIP) {
+    const r = rangoDe(valor);
+    el.className = 'ayuda rango' + (r ? ' ' + r.tipo : '');
+    el.textContent = !r || r.tipo === 'nombre' ? ''
+      : r.tipo === 'local' ? '✔ Es esta misma compu'
+      : r.tipo === 'misma' ? `✔ En la misma red que esta compu (${r.via.nombre}: ${r.via.ip})`
+      : enVentanaIP ? `⚠ Fuera de la red de esta compu (se sugiere ${sugerida(r.ip).ip} para esta compu)`
+      : `⚠ Fuera de la red de esta compu. Revisá la IP, o tocá «Cambiar IP de esta compu» (más abajo) para ponerla en ${sugerida(r.ip).ip}.`;
+  }
+  function textoAdaptador(a) {
+    const ips = a.ips.length ? a.ips.map((x) => `${x.ip} / ${x.mascara}`).join(', ') : 'sin IP';
+    const notas = [
+      a.dhcp === true ? 'automática' : a.dhcp === false ? 'manual' : '',
+      a.conectado ? '' : 'desconectado',
+      a.ips.some((x) => x.ip.startsWith('169.254.')) ? 'nadie le dio IP (sin DHCP)' : '',
+    ].filter(Boolean).join(' · ');
+    return `${a.nombre}: ${ips}${notas ? ' — ' + notas : ''}`;
+  }
+  function pintarDiagnostico(cont, m) {
+    cont.textContent = '';
+    for (const [nombre, d] of [['ProPresenter', m.pp], ['Resolume', m.rs]]) {
+      cont.append(h('h4', {}, `${nombre} (${d.destino})`));
+      for (const l of d.lineas) {
+        const clase = l.ok === true ? 'ok' : l.ok === false ? 'mal' : 'aviso';
+        cont.append(h('div', { class: 'linea ' + clase }, (l.ok === true ? '✔ ' : l.ok === false ? '✖ ' : '⚠ ') + l.texto));
+      }
+    }
+    cont.append(h('p', { class: 'ayuda' }, 'Resolume (OSC) no confirma lo que recibe: si todo da ✔ y no reacciona, revisá «OSC Input» y las direcciones OSC. Recordá tocar «Guardar» para usar los datos nuevos.'));
+  }
+
+  function abrirCambioIP(A) {
+    const R = S.redCompu;
+    if (!R) return toast('Cargando…', 'Probá de nuevo en un instante.');
+    let cerrar;
+    if (!R.local || R.sistema === 'otro' || !R.adaptadores.length) {
+      const motivo = !R.local
+        ? `Por seguridad, la IP solo se cambia desde la compu donde corre el panel (ahí aparece el pedido de permiso de administrador). En esa compu abrí http://localhost:${R.puerto}`
+        : R.sistema === 'otro' ? 'Cambiar la IP desde el panel funciona solo en Windows y Mac.'
+        : 'No se encontró ningún adaptador de red en esta compu.';
+      cerrar = modal([h('h2', {}, '🌐 IP de esta compu'), h('p', {}, motivo),
+        h('div', { class: 'pie' }, h('button', { class: 'b primario', onclick: () => cerrar() }, 'Entendido'))], { cerrarAfuera: true });
+      return;
+    }
+
+    // Por defecto, el adaptador que no recibió IP (cable directo sin router) o el primero conectado.
+    const inicial = R.adaptadores.find((a) => a.ips.some((x) => x.ip.startsWith('169.254.'))) || R.adaptadores[0];
+    const sel = h('select', {}, R.adaptadores.map((a) => h('option', { value: a.nombre, selected: a === inicial }, textoAdaptador(a))));
+    const iIP = h('input', { type: 'text', inputMode: 'decimal', placeholder: '192.168.0.200', autocapitalize: 'off', autocomplete: 'off' });
+    const iMascara = h('input', { type: 'text', inputMode: 'decimal', value: '255.255.255.0', autocapitalize: 'off', autocomplete: 'off' });
+    const iPuerta = h('input', { type: 'text', inputMode: 'decimal', placeholder: 'Vacío si no sabés', autocapitalize: 'off', autocomplete: 'off' });
+    const rManual = h('input', { type: 'radio', name: 'modo-ip', checked: true });
+    const rAuto = h('input', { type: 'radio', name: 'modo-ip' });
+    const camposManual = h('div', {});
+    const actualizarModo = () => { camposManual.hidden = rAuto.checked; };
+    rManual.onchange = rAuto.onchange = actualizarModo;
+    const usar = (sug) => { iIP.value = sug.ip; iMascara.value = sug.mascara; iPuerta.value = ''; rManual.checked = true; actualizarModo(); };
+
+    // Dónde está cada equipo respecto de esta compu, y la IP que conviene si está fuera de rango.
+    const estado = [], sugerencias = [];
+    for (const [nombre, valor] of [['ProPresenter', A.propresenter.ip], ['Resolume', A.resolume.ip]]) {
+      const el = h('div', { class: 'ayuda rango' });
+      pintarRango(el, valor, true);
+      estado.push(h('div', {}, h('b', {}, nombre + ' (' + limpiarHost(valor) + '): '), el));
+      const r = rangoDe(valor);
+      if (r && r.tipo === 'fuera' && !sugerencias.some((x) => redDe(x.ip, x.mascara) === redDe(r.ip, x.mascara))) sugerencias.push({ nombre, ...sugerida(r.ip) });
+    }
+    if (sugerencias.length) usar(sugerencias[0]);
+    else if (inicial.dhcp === false && inicial.ips[0]) { iIP.value = inicial.ips[0].ip; iMascara.value = inicial.ips[0].mascara; }
+
+    camposManual.append(
+      sugerencias.length ? h('div', { class: 'sugerencias' }, sugerencias.map((x) =>
+        h('button', { type: 'button', class: 'b chico', onclick: () => usar(x) }, `Usar ${x.ip} (red de ${x.nombre})`))) : null,
+      h('div', { class: 'tres' },
+        h('div', { class: 'campo' }, h('label', {}, 'IP para esta compu'), iIP),
+        h('div', { class: 'campo' }, h('label', {}, 'Máscara'), iMascara),
+        h('div', { class: 'campo' }, h('label', {}, 'Puerta de enlace (opcional)'), iPuerta)),
+      h('div', { class: 'ayuda' }, 'El último número no lo tiene que usar otro equipo de la red (por eso se sugiere .200). Sin puerta de enlace, esta conexión no da internet: no hace falta para el panel.'));
+
+    const bAplicar = h('button', { class: 'b primario' }, 'Aplicar');
+    bAplicar.onclick = async () => {
+      const pedido = rAuto.checked ? { adaptador: sel.value, modo: 'dhcp' }
+        : { adaptador: sel.value, modo: 'manual', ip: iIP.value.trim(), mascara: iMascara.value.trim(), puerta: iPuerta.value.trim() };
+      if (pedido.modo === 'manual' && !esIPv4(pedido.ip)) { iIP.focus(); return toast('IP inválida', 'Escribila con este formato: 192.168.0.200', 'error'); }
+      const texto = pedido.modo === 'dhcp' ? `«${pedido.adaptador}» va a pasar a automática (DHCP).` : `«${pedido.adaptador}» va a quedar con la IP ${pedido.ip}.`;
+      if (!(await confirmar('¿Cambiar la IP de esta compu?', texto + ' Después confirmá el permiso de administrador que aparece en esta pantalla.', 'Cambiar IP', false))) return;
+      if (!enviar({ t: 'cambiarIP', pedido })) return toast('Sin conexión', 'El panel no está conectado al servidor.', 'error');
+      bAplicar.disabled = true; bAplicar.textContent = '⏳ Esperando el permiso…';
+      S.alIP = (m) => {
+        S.alIP = null;
+        bAplicar.disabled = false; bAplicar.textContent = 'Aplicar';
+        toast(m.ok ? (m.sim ? 'Simulación' : '✔ IP cambiada') : 'No se pudo cambiar la IP', m.msg, m.ok ? 'ok' : 'error', 10000);
+        if (m.ok) cerrar();
+        // La IP nueva tarda un momento en aparecer (con DHCP, unos segundos más).
+        setTimeout(() => enviar({ t: 'red' }), 2500);
+        if (pedido.modo === 'dhcp') setTimeout(() => enviar({ t: 'red' }), 9000);
+      };
+    };
+
+    const porLocalhost = ['localhost', '127.0.0.1', '[::1]'].includes(location.hostname);
+    cerrar = modal([
+      h('h2', {}, '🌐 Cambiar la IP de esta compu'),
+      h('div', { class: 'estado-red' }, estado),
+      h('div', { class: 'campo' }, h('label', {}, 'Adaptador de red (cable o wifi por el que se llega a ProPresenter / Resolume)'), sel),
+      h('div', { class: 'campo check' }, h('label', {}, rManual, 'Manual (IP fija)')),
+      h('div', { class: 'campo check' }, h('label', {}, rAuto, 'Automática (DHCP: la IP la da el router)')),
+      camposManual,
+      h('ul', { class: 'avisos' },
+        h('li', {}, R.sistema === 'windows' ? 'Windows va a preguntar «¿Quieres permitir que esta aplicación haga cambios?»: tocá «Sí».' : 'La Mac va a pedir tu contraseña de usuario (administrador).'),
+        h('li', {}, 'Si los celulares se conectan por este mismo adaptador, se van a desconectar: después volvé a escanear el QR (📱).'),
+        porLocalhost ? null : h('li', { class: 'mal' }, 'Estás usando el panel por ', h('b', {}, location.host), ': después del cambio esa dirección puede dejar de andar. Mejor abrilo como ',
+          h('a', { href: `http://localhost:${R.puerto}/` }, `http://localhost:${R.puerto}`), ' y hacé el cambio desde ahí.')),
+      h('div', { class: 'pie' }, h('button', { class: 'b', onclick: () => cerrar() }, 'Cancelar'), bAplicar),
     ]);
   }
 
